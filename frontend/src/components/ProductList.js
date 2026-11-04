@@ -19,7 +19,7 @@ export default function ProductList() {
     }
 
     fetchData();
-  }, []);
+  }, [updateProducts]);
 
   return(
     <div>
