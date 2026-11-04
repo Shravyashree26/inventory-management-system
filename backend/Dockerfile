@@ -9,6 +9,6 @@ RUN useradd -r -u 1001 appuser
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 USER 1001
-EXPOSE 8080
+EXPOSE 8081
 HEALTHCHECK CMD curl -f http://localhost:8080/actuator/health || exit 1
 CMD ["java","-jar","app.jar"]
