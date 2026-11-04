@@ -1,61 +1,40 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-.idea/*
-
-# dependencies
-node_modules
-/.pnp
-.pnp.js
-
-# testing
-/coverage
-
-# production
-/build
-
-# misc
-.DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-HELP.md
-target/
-!.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
-
-### STS ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-
-### IntelliJ IDEA ###
-.idea
-*.iws
+# IDE / OS
+.idea/
 *.iml
-*.ipr
-
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
-
-### VS Code ###
 .vscode/
+.DS_Store
+
+# Java
+target/
+HELP.md
+!.mvn/wrapper/maven-wrapper.jar
+
+# Node
+node_modules/
+/frontend/build/
+/frontend/coverage/
+npm-debug.log*
+
+# Secrets & local env -- never commit these
 .env
-.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+tfplan
+
+# Scanner output
+gitleaks-report.*
+trivy-*.json
+trivy-*.sarif
+zap-report.*
+.scannerwork/
+

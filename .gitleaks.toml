@@ -1,0 +1,12 @@
+title = "inventory-management-system gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Files that legitimately contain placeholder values or hashes"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)terraform\.tfvars\.example$''',
+]

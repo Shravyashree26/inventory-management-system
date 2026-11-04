@@ -1,27 +1,46 @@
+# Local stack:  cp .env.example .env && docker compose up --build
+# UI:  http://localhost:3000     API:  http://localhost:8080/api/products
 services:
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: cisco
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env and set POSTGRES_PASSWORD}
       POSTGRES_DB: productdb
-    ports:
-      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d productdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # no published port: only the backend needs the database
 
-  spring-boot-app:
+  backend:
     build:
       context: ./backend
-    ports:
-      - "8081:8080"
-    depends_on:
-      - postgres
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/productdb
       SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: cisco
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_SEED_DATA: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-  react-app:
+  frontend:
     build:
       context: ./frontend
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: "8080"
     ports:
-      - "3000:80"
+      - "3000:8080"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+

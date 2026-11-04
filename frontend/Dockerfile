@@ -1,33 +1,20 @@
-# Build stage
-FROM node:18 AS build
-
+# ---- build ----
+FROM node:22-alpine AS build
 WORKDIR /app
-
-# Copy package.json and package-lock.json to the container
 COPY package*.json ./
-
-# Install dependencies
-RUN npm install
-
-# Copy the rest of the application code
+RUN npm ci
 COPY . .
-
-# Build the React app
+# strict CSP in nginx forbids inline scripts
+ENV INLINE_RUNTIME_CHUNK=false
 RUN npm run build
 
-# Serve stage
-FROM nginx:1.28-alpine
-RUN apk upgrade --no-cache
-
-# Copy the custom nginx.conf file to the container
+# ---- runtime (non-root, listens on 8080) ----
+FROM nginxinc/nginx-unprivileged:stable-alpine
+ENV BACKEND_HOST=backend BACKEND_PORT=8080 DNS_RESOLVER=127.0.0.11
 COPY .docker/default.conf.template /etc/nginx/templates/default.conf.template
-ENV BACKEND_HOST=spring-boot-app NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
-
-# Copy the built React app from the build stage to the nginx container
 COPY --from=build /app/build /usr/share/nginx/html
+USER nginx
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD wget -qO- http://localhost:8080/healthz >/dev/null || exit 1
 
-# Expose port 80
-EXPOSE 80
-
-# Start Nginx
-CMD ["nginx", "-g", "daemon off;"]
