@@ -1,7 +1,7 @@
-import React, {useEffect, useContext} from "react";
-import {NavLink, useParams, useNavigate} from "react-router-dom";
-import {deleteProductById, getProductById} from "../services/ApiService";
-import {ProductContext} from "../context/ProductContext";
+import React, { useEffect, useContext } from "react";
+import { NavLink, useParams, useNavigate } from "react-router-dom";
+import { deleteProductById, getProductById } from "../services/ApiService";
+import { ProductContext } from "../context/ProductContext";
 
 export default function ProductDetail() {
 
@@ -10,18 +10,16 @@ export default function ProductDetail() {
   const navigate = useNavigate();
 
   useEffect(() => {
-
     async function fetchData() {
       try {
-        const product = await getProductById(id);
-        updateProduct(product);
+        updateProduct(await getProductById(id));
       } catch (error) {
-        console.error('Error fetching products:', error);
+        console.error('Error fetching product:', error);
       }
     }
 
     fetchData();
-  }, []);
+  }, [id, updateProduct]);
 
   async function deleteProduct() {
     try {
@@ -29,11 +27,11 @@ export default function ProductDetail() {
       removeProductById(id);
       navigate("/");
     } catch (error) {
-      console.error('Error fetching products:', error);
+      console.error('Error deleting product:', error);
     }
   }
 
-  return(
+  return (
     <div>
       <nav aria-label="breadcrumb">
         <ol className="breadcrumb">
@@ -41,7 +39,7 @@ export default function ProductDetail() {
             <NavLink to="/">Products</NavLink>
           </li>
           <li className="breadcrumb-item">
-            <NavLink active to={`/${id}`}>{id}</NavLink>
+            <NavLink to={`/${id}`}>{id}</NavLink>
           </li>
         </ol>
       </nav>
@@ -68,11 +66,10 @@ export default function ProductDetail() {
             <NavLink className="btn btn-light" to={`/${id}/edit`}>Edit</NavLink>
           </div>
           <div className="col-6 text-end">
-            <button onClick={deleteProduct} className="btn btn-danger pull-right">Delete</button>
+            <button onClick={deleteProduct} className="btn btn-danger">Delete</button>
           </div>
         </div>
       </div>
     </div>
   );
-
 }
