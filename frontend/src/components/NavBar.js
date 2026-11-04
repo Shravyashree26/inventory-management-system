@@ -1,21 +1,21 @@
 import { NavLink } from "react-router-dom";
 
+const linkClass = ({ isActive }) => `nav-link${isActive ? " active" : ""}`;
+
 export default function NavBar() {
-  return(
+  return (
     <nav className="navbar navbar-expand-lg bg-body-tertiary mt-3">
       <div className="container-fluid">
-        <a className="navbar-brand" href="#">Inventory Management System</a>
+        <NavLink className="navbar-brand" to="/">Inventory Management System</NavLink>
 
-        <div className="collapse navbar-collapse" id="navbarSupportedContent">
-          <ul className="navbar-nav me-auto mb-2 mb-lg-0">
-            <li className="nav-item">
-              <NavLink activeClassName="active" className="nav-link" aria-current="page" to="/">List</NavLink>
-            </li>
-            <li className="nav-item">
-              <NavLink activeClassName="active" className="nav-link" to="/new">Add</NavLink>
-            </li>
-          </ul>
-        </div>
+        <ul className="navbar-nav me-auto mb-2 mb-lg-0 flex-row gap-3">
+          <li className="nav-item">
+            <NavLink end className={linkClass} to="/">List</NavLink>
+          </li>
+          <li className="nav-item">
+            <NavLink className={linkClass} to="/new">Add</NavLink>
+          </li>
+        </ul>
       </div>
     </nav>
   );
