@@ -11,7 +11,7 @@ RUN npm run build
 # ---- runtime (non-root, listens on 8080) ----
 FROM nginxinc/nginx-unprivileged:stable-alpine
 ENV BACKEND_HOST=backend BACKEND_PORT=8080 DNS_RESOLVER=127.0.0.11
-COPY .docker/default.conf.template /etc/nginx/templates/default.conf.template
+COPY .docker/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /app/build /usr/share/nginx/html
 USER nginx
 EXPOSE 8080
