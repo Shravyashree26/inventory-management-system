@@ -13,7 +13,7 @@ export default function ProductTableRow ({id, title, price, quantity}) {
       removeProductById(id);
 
     } catch (error) {
-      console.error('Error fetching products:', error);
+      console.error('Error deleting product:', error);
     }
   }
 
