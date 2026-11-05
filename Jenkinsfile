@@ -15,7 +15,7 @@ pipeline {
 
   environment {
     SONAR_HOST_URL = 'http://127.0.0.1:9000'
-    K3S_CONFIG = '/etc/rancher/k3s/k3s.yaml'
+    K3S_CONFIG = '/var/lib/jenkins/.kube/config'
     K3S_NAMESPACE = 'inventory'
     MONITORING_NAMESPACE = 'monitoring'
     BACKEND_IMAGE = 'inventory-backend'
@@ -39,7 +39,7 @@ pipeline {
           docker info >/dev/null
           if [ "${DEPLOY}" = "true" ] || [ "${MONITOR}" = "true" ]; then
             test -f "$K3S_CONFIG" || { echo "K3s kubeconfig missing: $K3S_CONFIG"; exit 1; }
-            sudo -n k3s kubectl get nodes
+            KUBECONFIG="$K3S_CONFIG" /usr/local/bin/k3s kubectl get nodes
           fi
         '''
       }
@@ -247,8 +247,8 @@ pipeline {
         sh '''
           set -eu
           test -f "$K3S_CONFIG"
-          sudo -n k3s kubectl get nodes -o wide
-          sudo -n k3s kubectl get namespaces
+          KUBECONFIG="$K3S_CONFIG" /usr/local/bin/k3s kubectl get nodes -o wide
+          KUBECONFIG="$K3S_CONFIG" /usr/local/bin/k3s kubectl get namespaces
         '''
       }
     }
@@ -277,7 +277,7 @@ pipeline {
       steps {
         sh '''
           set -eu
-          sudo -n cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
+          cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
           chmod 600 "$WORKSPACE/.kubeconfig"
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
