@@ -47,7 +47,7 @@ Gitleaks is a tool for **detecting** secrets like passwords, API keys, and token
     ░    gitleaks
 
 
-Finding:     "export BUNDLE_ENTERPRISE__CONTRIBSYS__COM=cafebabe:deadbeef",
+Finding:     "export BUNDLE_ENTERPRISE__CONTRIBSYS__COM=YOUR_TOKEN_HERE",
 Secret:      cafebabe:deadbeef
 RuleID:      sidekiq-secret
 Entropy:     2.609850
