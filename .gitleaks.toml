@@ -10,3 +10,5 @@ paths = [
   '''(^|/)package-lock\.json$''',
   '''(^|/)terraform\.tfvars\.example$''',
 ]
+
+regexes = [ '''cafebabe:deadbeef''' ]
