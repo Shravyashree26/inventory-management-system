@@ -1,3 +1,4 @@
+
 pipeline {
   agent any
 
@@ -55,10 +56,15 @@ pipeline {
       }
     }
 
+    // UPDATED: Use H2 in-memory database for Jenkins tests.
+    // No PostgreSQL server is required for this Maven stage.
     stage('Maven: Backend Build and Tests') {
       steps {
         sh '''
           docker run --rm -u "$(id -u):$(id -g)" \
+            -e SPRING_DATASOURCE_URL="jdbc:h2:mem:ci;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE" \
+            -e SPRING_DATASOURCE_USERNAME="sa" \
+            -e SPRING_DATASOURCE_PASSWORD="" \
             -v "$PWD/backend":/app -w /app \
             maven:3.9-eclipse-temurin-17 \
             mvn -B -Duser.home=/tmp clean verify
