@@ -733,21 +733,44 @@ pipeline {
       }
 
       steps {
-        sh '''
+        sh """
           set -eu
+
+          echo "Checking application URL..."
+
+          test -s app_url.txt
+          APP_URL=$(cat app_url.txt)
+
+          echo "ZAP target: $APP_URL"
+
+          echo "Testing application connectivity from Jenkins host..."
+
+          curl --fail --silent --show-error \\
+            "$APP_URL/api/products" \\
+            -o /dev/null
 
           mkdir -p zap
           chmod 777 zap
 
-          docker run --rm \
-            -v "$PWD/zap:/zap/wrk:rw" \
-            ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py \
-            -t "$(cat app_url.txt)" \
-            -r zap-report.html \
-            -J zap-report.json \
+          echo "Starting ZAP using host networking..."
+
+          docker run --rm \\
+            --network host \\
+            -v "$WORKSPACE/zap:/zap/wrk:rw" \\
+            ghcr.io/zaproxy/zaproxy:stable \\
+            zap-baseline.py \\
+            -t "$APP_URL" \\
+            -r /zap/wrk/zap-report.html \\
+            -J /zap/wrk/zap-report.json \\
             -I
-        '''
+
+          echo "Checking ZAP reports..."
+
+          test -s zap/zap-report.html
+          test -s zap/zap-report.json
+
+          echo "ZAP scan completed successfully."
+        """
       }
 
       post {
@@ -760,7 +783,6 @@ pipeline {
       }
     }
 
-    // ==========================================
     // 20. PROMETHEUS AND GRAFANA
     // ==========================================
 
