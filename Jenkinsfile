@@ -6,19 +6,19 @@ pipeline {
     booleanParam(
       name: 'DEPLOY',
       defaultValue: false,
-      description: 'Build, import images into local K3s and deploy Inventory Management'
+      description: 'Deploy Inventory Management application to K3s'
     )
 
     booleanParam(
       name: 'MONITOR',
       defaultValue: false,
-      description: 'Install or upgrade Prometheus and Grafana on K3s'
+      description: 'Install Prometheus and Grafana monitoring'
     )
 
     booleanParam(
       name: 'RUN_ZAP',
       defaultValue: false,
-      description: 'Run OWASP ZAP baseline scan against the deployed application'
+      description: 'Run OWASP ZAP DAST scan after deployment'
     )
   }
 
@@ -77,9 +77,9 @@ pipeline {
 
             command -v kubectl
 
-            echo "Checking K3s connection..."
+            export KUBECONFIG="$K3S_CONFIG"
 
-            KUBECONFIG="$K3S_CONFIG" kubectl get nodes
+            kubectl get nodes
 
           fi
 
@@ -105,7 +105,7 @@ pipeline {
     }
 
     // ==========================================
-    // 2. GITLEAKS SECRET SCAN
+    // 2. GITLEAKS
     // ==========================================
 
     stage('Gitleaks: Secret Scan') {
@@ -119,7 +119,6 @@ pipeline {
             -v "$PWD":/repo \
             ghcr.io/gitleaks/gitleaks:v8.24.2 \
             git /repo \
-            --config /repo/.gitleaks.toml \
             --redact \
             --verbose
         '''
@@ -127,7 +126,7 @@ pipeline {
     }
 
     // ==========================================
-    // 3. MAVEN BACKEND BUILD AND TESTS
+    // 3. MAVEN BACKEND BUILD
     // ==========================================
 
     stage('Maven: Backend Build and Tests') {
@@ -159,7 +158,7 @@ pipeline {
     }
 
     // ==========================================
-    // 4. FRONTEND TESTS AND BUILD
+    // 4. FRONTEND BUILD AND TEST
     // ==========================================
 
     stage('npm: Frontend Tests and Build') {
@@ -180,7 +179,7 @@ pipeline {
     }
 
     // ==========================================
-    // 5. SONARQUBE SAST
+    // 5. SONARQUBE
     // ==========================================
 
     stage('SonarQube: SAST') {
@@ -210,7 +209,7 @@ pipeline {
     }
 
     // ==========================================
-    // 6. OWASP DEPENDENCY-CHECK SCA
+    // 6. OWASP DEPENDENCY CHECK
     // ==========================================
 
     stage('OWASP Dependency-Check: SCA') {
@@ -260,7 +259,7 @@ pipeline {
     }
 
     // ==========================================
-    // 7. HADOLINT DOCKERFILE LINT
+    // 7. HADOLINT
     // ==========================================
 
     stage('Hadolint: Dockerfile Lint') {
@@ -278,11 +277,12 @@ pipeline {
             echo "Checking $file"
 
             docker run --rm -i \
-              hadolint/hadolint:latest-debian < "$file"
+              hadolint/hadolint:latest-debian \
+              --failure-threshold error - < "$file"
 
           done
 
-          echo "Dockerfile lint completed."
+          echo "Hadolint Dockerfile checks completed."
         '''
       }
     }
@@ -304,7 +304,7 @@ pipeline {
             -t "$FRONTEND_IMAGE:$BUILD_NUMBER" \
             frontend
 
-          echo "Docker images created."
+          echo "Docker images created successfully."
 
           docker images | grep inventory
         '''
@@ -312,7 +312,7 @@ pipeline {
     }
 
     // ==========================================
-    // 9. TRIVY CONTAINER IMAGE SCAN
+    // 9. TRIVY IMAGE SCAN
     // ==========================================
 
     stage('Trivy: Container Image Scan') {
@@ -357,7 +357,7 @@ pipeline {
 
           done
 
-          echo "Trivy image scans completed."
+          echo "Trivy scans completed."
         '''
       }
 
@@ -372,7 +372,7 @@ pipeline {
     }
 
     // ==========================================
-    // 10. CRITICAL IMAGE VULNERABILITY GATE
+    // 10. CRITICAL VULNERABILITY GATE
     // ==========================================
 
     stage('Security Gate: Critical Image Vulnerabilities') {
@@ -380,7 +380,8 @@ pipeline {
         sh '''
           set -eu
 
-          trivy() {
+          for img in backend frontend; do
+
             docker run --rm \
               -u "$(id -u):$(id -g)" \
               -e HOME=/tmp \
@@ -388,12 +389,9 @@ pipeline {
               -v /var/lib/jenkins/trivy-cache:/cache \
               -v "$PWD":/w \
               -w /w \
-              ghcr.io/aquasecurity/trivy:0.69.3 "$@"
-          }
-
-          for img in backend frontend; do
-
-            trivy image --no-progress \
+              ghcr.io/aquasecurity/trivy:0.69.3 \
+              image \
+              --no-progress \
               --input "$img.tar" \
               --severity CRITICAL \
               --ignore-unfixed \
@@ -407,7 +405,7 @@ pipeline {
     }
 
     // ==========================================
-    // 11. TRIVY KUBERNETES AND DOCKERFILE SCAN
+    // 11. TRIVY CONFIGURATION SCAN
     // ==========================================
 
     stage('Trivy: Kubernetes and Dockerfile Config') {
@@ -443,8 +441,6 @@ pipeline {
 
           test -d "$TERRAFORM_DIR"
 
-          rm -rf "$TERRAFORM_DIR/.terraform"
-
           docker run --rm \
             -u "$(id -u):$(id -g)" \
             -e HOME=/tmp \
@@ -469,15 +465,13 @@ pipeline {
             hashicorp/terraform:1.12.2 \
             validate
 
-          rm -rf "$TERRAFORM_DIR/.terraform"
-
-          echo "Terraform validation passed."
+          echo "Terraform validation completed."
         '''
       }
     }
 
     // ==========================================
-    // 13. CHECKOV IAC SECURITY SCAN
+    // 13. CHECKOV
     // ==========================================
 
     stage('Checkov: IaC Security Scan') {
@@ -536,14 +530,12 @@ pipeline {
 
           test -f "$K3S_CONFIG"
 
-          cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
-
+          cp "$K3S_CONFIG" "$WORKSPACE/.kubeconfig"
           chmod 600 "$WORKSPACE/.kubeconfig"
 
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl get nodes -o wide
-
           kubectl get namespaces
 
           echo "K3s cluster is accessible."
@@ -552,7 +544,7 @@ pipeline {
     }
 
     // ==========================================
-    // 16. IMPORT DOCKER IMAGES INTO K3S
+    // 16. IMPORT IMAGES INTO K3S
     // ==========================================
 
     stage('K3s: Import Local Docker Images') {
@@ -576,11 +568,9 @@ pipeline {
             -o frontend-image.tar
 
           sudo -n k3s ctr images import backend-image.tar
-
           sudo -n k3s ctr images import frontend-image.tar
 
           sudo -n k3s ctr images list | grep inventory-backend
-
           sudo -n k3s ctr images list | grep inventory-frontend
 
           echo "Images imported into K3s."
@@ -589,7 +579,7 @@ pipeline {
     }
 
     // ==========================================
-    // 17. KUBERNETES INVENTORY DEPLOYMENT
+    // 17. KUBERNETES DEPLOYMENT
     // ==========================================
 
     stage('Kubernetes: Deploy Inventory') {
@@ -607,12 +597,6 @@ pipeline {
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl apply -f k8s/namespace.yaml
-
-          kubectl -n "$K3S_NAMESPACE" \
-            get secret db-credentials >/dev/null 2>&1 || \
-            kubectl -n "$K3S_NAMESPACE" \
-            create secret generic db-credentials \
-            --from-literal=password="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 
           sed \
             -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE:$BUILD_NUMBER|g" \
@@ -639,7 +623,7 @@ pipeline {
     }
 
     // ==========================================
-    // 18. HEALTH CHECKS AND SMOKE TESTS
+    // 18. HEALTH CHECKS
     // ==========================================
 
     stage('Kubernetes: Health Checks and Smoke Tests') {
@@ -657,7 +641,6 @@ pipeline {
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl -n "$K3S_NAMESPACE" get pods -o wide
-
           kubectl -n "$K3S_NAMESPACE" get services
 
           NODEPORT="$(
@@ -666,10 +649,7 @@ pipeline {
             -o jsonpath='{.spec.ports[0].nodePort}'
           )"
 
-          [ -n "$NODEPORT" ] || {
-            echo "Frontend Service must be type NodePort."
-            exit 1
-          }
+          test -n "$NODEPORT"
 
           APP_URL="http://127.0.0.1:$NODEPORT"
 
@@ -685,7 +665,7 @@ pipeline {
               "$APP_URL/api/products" || true
             )"
 
-            echo "Attempt $i: /api/products -> $code"
+            echo "Attempt $i: API returned $code"
 
             [ "$code" = "200" ] && break
 
@@ -709,7 +689,7 @@ pipeline {
     }
 
     // ==========================================
-    // 19. OWASP ZAP DAST
+    // 19. OWASP ZAP
     // ==========================================
 
     stage('OWASP ZAP: DAST') {
@@ -729,7 +709,6 @@ pipeline {
           set -eu
 
           mkdir -p zap
-
           chmod 777 zap
 
           docker run --rm \
@@ -754,7 +733,7 @@ pipeline {
     }
 
     // ==========================================
-    // 20. PROMETHEUS AND GRAFANA MONITORING
+    // 20. PROMETHEUS AND GRAFANA
     // ==========================================
 
     stage('Monitoring: Prometheus and Grafana on K3s') {
@@ -814,14 +793,12 @@ pipeline {
           fi
 
           kubectl -n "$MONITORING_NAMESPACE" get pods
-
           kubectl -n "$MONITORING_NAMESPACE" get svc
 
-          echo "Grafana URL: http://<EC2-PUBLIC-IP>:30300"
-
+          echo "Grafana URL: http://<SERVER-PUBLIC-IP>:30300"
           echo "Grafana username: admin"
 
-          echo "Retrieve Grafana password using:"
+          echo "Retrieve the Grafana password with:"
           echo "sudo k3s kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d"
         '''
       }
@@ -852,7 +829,7 @@ pipeline {
     }
 
     failure {
-      echo 'Pipeline failed. Review the failed stage and Jenkins console output.'
+      echo 'Pipeline failed. Check the first failed stage in the console output.'
     }
   }
 }
