@@ -255,7 +255,7 @@ pipeline {
     }
 
     // ==========================================
-    // 7. HADOLINT - CORRECTED
+    // 7. HADOLINT
     // ==========================================
 
     stage('Hadolint: Dockerfile Lint') {
@@ -555,21 +555,35 @@ pipeline {
         sh '''
           set -eu
 
+          echo "Saving backend image..."
+
           docker save \
             "$BACKEND_IMAGE:$BUILD_NUMBER" \
             -o backend-image.tar
+
+          echo "Saving frontend image..."
 
           docker save \
             "$FRONTEND_IMAGE:$BUILD_NUMBER" \
             -o frontend-image.tar
 
-          sudo -n k3s ctr images import backend-image.tar
-          sudo -n k3s ctr images import frontend-image.tar
+          echo "Importing backend image into K3s..."
 
-          sudo -n k3s ctr images list | grep inventory-backend
-          sudo -n k3s ctr images list | grep inventory-frontend
+          sudo -n /usr/local/bin/k3s ctr images import backend-image.tar
 
-          echo "Images imported into K3s."
+          echo "Importing frontend image into K3s..."
+
+          sudo -n /usr/local/bin/k3s ctr images import frontend-image.tar
+
+          echo "Verifying backend image..."
+
+          sudo -n /usr/local/bin/k3s ctr images list | grep inventory-backend
+
+          echo "Verifying frontend image..."
+
+          sudo -n /usr/local/bin/k3s ctr images list | grep inventory-frontend
+
+          echo "Both images imported into K3s successfully."
         '''
       }
     }
@@ -591,22 +605,42 @@ pipeline {
 
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
+          echo "Applying Kubernetes namespace..."
+
           kubectl apply -f k8s/namespace.yaml
+
+          echo "Checking database Secret..."
+
+          kubectl -n "$K3S_NAMESPACE" get secret db-credentials >/dev/null || {
+            echo "ERROR: db-credentials Secret is missing."
+            echo "Create the database Secret before deployment."
+            exit 1
+          }
+
+          echo "Rendering Kubernetes manifests..."
 
           sed \
             -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE:$BUILD_NUMBER|g" \
             -e "s|__FRONTEND_IMAGE__|$FRONTEND_IMAGE:$BUILD_NUMBER|g" \
             k8s/inventory.yaml > rendered.yaml
 
+          echo "Applying Kubernetes resources..."
+
           kubectl apply -f rendered.yaml
+
+          echo "Waiting for PostgreSQL deployment..."
 
           kubectl -n "$K3S_NAMESPACE" \
             rollout status deployment/postgres \
             --timeout=180s
 
+          echo "Waiting for backend deployment..."
+
           kubectl -n "$K3S_NAMESPACE" \
             rollout status deployment/backend \
             --timeout=420s
+
+          echo "Waiting for frontend deployment..."
 
           kubectl -n "$K3S_NAMESPACE" \
             rollout status deployment/frontend \
@@ -633,6 +667,8 @@ pipeline {
           set -eu
 
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
+
+          echo "Checking Kubernetes pods..."
 
           kubectl -n "$K3S_NAMESPACE" get pods -o wide
           kubectl -n "$K3S_NAMESPACE" get services
