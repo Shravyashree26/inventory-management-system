@@ -3,9 +3,21 @@ pipeline {
   agent any
 
   parameters {
-    booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Build, import images into local K3s and deploy Inventory Management')
-    booleanParam(name: 'MONITOR', defaultValue: false, description: 'Install or upgrade Prometheus and Grafana on K3s')
-    booleanParam(name: 'RUN_ZAP', defaultValue: false, description: 'Run OWASP ZAP baseline scan against the deployed application')
+    booleanParam(
+      name: 'DEPLOY',
+      defaultValue: false,
+      description: 'Build, import images into local K3s and deploy Inventory Management'
+    )
+    booleanParam(
+      name: 'MONITOR',
+      defaultValue: false,
+      description: 'Install or upgrade Prometheus and Grafana on K3s'
+    )
+    booleanParam(
+      name: 'RUN_ZAP',
+      defaultValue: false,
+      description: 'Run OWASP ZAP baseline scan against the deployed application'
+    )
   }
 
   options {
@@ -19,23 +31,34 @@ pipeline {
     K3S_CONFIG = '/var/lib/jenkins/.kube/config'
     K3S_NAMESPACE = 'inventory'
     MONITORING_NAMESPACE = 'monitoring'
+
     BACKEND_IMAGE = 'inventory-backend'
     FRONTEND_IMAGE = 'inventory-frontend'
+
     TERRAFORM_DIR = 'devsecops/terraform'
     MONITORING_DIR = 'devsecops/monitoring'
-    SUPPRESSION_FILE = 'devsecops/security/dependency-check-suppressions.xml'
   }
 
   stages {
+
+    // ==========================================
+    // 1. PREFLIGHT
+    // ==========================================
 
     stage('Preflight: Check tools and folders') {
       steps {
         sh '''
           set -eu
+
+          echo "Checking project folders..."
+
           test -d backend
           test -d frontend
           test -d k8s
           test -d "$TERRAFORM_DIR"
+          test -d devsecops/security
+
+          echo "Checking Docker..."
           command -v docker
           command -v curl
           docker info >/dev/null
@@ -45,27 +68,56 @@ pipeline {
               echo "K3s kubeconfig missing: $K3S_CONFIG"
               exit 1
             }
-            KUBECONFIG="$K3S_CONFIG" /usr/local/bin/k3s kubectl get nodes
+
+            command -v kubectl
+
+            KUBECONFIG="$K3S_CONFIG" \
+              /usr/local/bin/k3s kubectl get nodes
           fi
+
+          if [ "${MONITOR}" = "true" ]; then
+            command -v helm
+          fi
+
+          echo "Preflight checks passed."
         '''
       }
     }
+
+    // ==========================================
+    // 2. GITLEAKS
+    // ==========================================
 
     stage('Gitleaks: Secret Scan') {
       steps {
         sh '''
-          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+          set -eu
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
             -v "$PWD":/repo \
             ghcr.io/gitleaks/gitleaks:v8.24.2 \
-            git /repo --config /repo/.gitleaks.toml --redact --verbose
+            git /repo \
+            --config /repo/.gitleaks.toml \
+            --redact \
+            --verbose
         '''
       }
     }
 
+    // ==========================================
+    // 3. MAVEN BACKEND BUILD
+    // ==========================================
+
     stage('Maven: Backend Build and Tests') {
       steps {
         sh '''
-          docker run --rm -u "$(id -u):$(id -g)" \
+          set -eu
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
             -e SPRING_DATASOURCE_URL="jdbc:h2:mem:ci;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE" \
             -e SPRING_DATASOURCE_USERNAME="sa" \
             -e SPRING_DATASOURCE_PASSWORD="" \
@@ -84,10 +136,17 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 4. FRONTEND BUILD
+    // ==========================================
+
     stage('npm: Frontend Tests and Build') {
       steps {
         sh '''
-          docker run --rm -u "$(id -u):$(id -g)" \
+          set -eu
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
             -e HOME=/tmp \
             -e CI=true \
             -v "$PWD/frontend":/app \
@@ -98,13 +157,23 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 5. SONARQUBE SAST
+    // ==========================================
+
     stage('SonarQube: SAST') {
       steps {
         withCredentials([
-          string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')
+          string(
+            credentialsId: 'sonarqube-token',
+            variable: 'SONAR_TOKEN'
+          )
         ]) {
           sh '''
-            docker run --rm --network host \
+            set -eu
+
+            docker run --rm \
+              --network host \
               -u "$(id -u):$(id -g)" \
               -e SONAR_TOKEN \
               -e SONAR_USER_HOME=/tmp/.sonar \
@@ -118,18 +187,27 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 6. OWASP DEPENDENCY CHECK
+    // ==========================================
+
     stage('OWASP Dependency-Check: SCA') {
+
       options {
-        timeout(time: 90, unit: 'MINUTES')
+        timeout(time: 120, unit: 'MINUTES')
       }
 
       steps {
         sh '''
           set -eu
 
-          mkdir -p odc-reports /var/lib/jenkins/odc-data
+          echo "Starting OWASP Dependency-Check..."
 
-          docker run --rm -u "$(id -u):$(id -g)" \
+          mkdir -p odc-reports
+          mkdir -p /var/lib/jenkins/odc-data
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
             -e HOME=/tmp \
             -e JAVA_OPTS=-Xmx2g \
             -v "$PWD":/src \
@@ -137,19 +215,31 @@ pipeline {
             owasp/dependency-check:12.1.0 \
             --scan "/src/backend/target/*.jar" \
             --scan /src/frontend/package-lock.json \
-            --suppression "/src/$SUPPRESSION_FILE" \
             --data /odc-data \
             --out /src/odc-reports \
             --format HTML \
             --format JSON \
             --disableNodeAudit \
+            --disableOssIndex \
             --nvdMaxRetryCount 20
-        '''
 
-        archiveArtifacts artifacts: 'odc-reports/*',
-          allowEmptyArchive: true
+          echo "Dependency-Check completed."
+        '''
+      }
+
+      post {
+        always {
+          archiveArtifacts(
+            artifacts: 'odc-reports/*',
+            allowEmptyArchive: true
+          )
+        }
       }
     }
+
+    // ==========================================
+    // 7. HADOLINT
+    // ==========================================
 
     stage('Hadolint: Dockerfile Lint') {
       steps {
@@ -157,32 +247,57 @@ pipeline {
           set -eu
 
           for file in backend/Dockerfile frontend/Dockerfile; do
+
             test -f "$file" || {
               echo "Missing Dockerfile: $file"
               exit 1
             }
 
-            docker run --rm -i hadolint/hadolint:latest-debian < "$file"
+            echo "Checking $file"
+
+            docker run --rm -i \
+              hadolint/hadolint:latest-debian < "$file"
+
           done
         '''
       }
     }
 
+    // ==========================================
+    // 8. DOCKER BUILD
+    // ==========================================
+
     stage('Docker Image Build') {
       steps {
         sh '''
-          docker build -t "$BACKEND_IMAGE:$BUILD_NUMBER" backend
-          docker build -t "$FRONTEND_IMAGE:$BUILD_NUMBER" frontend
+          set -eu
+
+          docker build \
+            -t "$BACKEND_IMAGE:$BUILD_NUMBER" \
+            backend
+
+          docker build \
+            -t "$FRONTEND_IMAGE:$BUILD_NUMBER" \
+            frontend
+
+          echo "Docker images created."
+
+          docker images | grep inventory
         '''
       }
     }
+
+    // ==========================================
+    // 9. TRIVY IMAGE SCAN
+    // ==========================================
 
     stage('Trivy: Container Image Scan') {
       steps {
         sh '''
           set -eu
 
-          mkdir -p trivy-reports /var/lib/jenkins/trivy-cache
+          mkdir -p trivy-reports
+          mkdir -p /var/lib/jenkins/trivy-cache
 
           trivy() {
             docker run --rm \
@@ -196,7 +311,10 @@ pipeline {
           }
 
           for img in backend frontend; do
-            docker save "inventory-$img:$BUILD_NUMBER" -o "$img.tar"
+
+            docker save \
+              "inventory-$img:$BUILD_NUMBER" \
+              -o "$img.tar"
 
             trivy image --no-progress \
               --input "$img.tar" \
@@ -212,13 +330,24 @@ pipeline {
               --input "$img.tar" \
               --format cyclonedx \
               --output "trivy-reports/sbom-$img.cdx.json"
+
           done
         '''
+      }
 
-        archiveArtifacts artifacts: 'trivy-reports/*',
-          allowEmptyArchive: true
+      post {
+        always {
+          archiveArtifacts(
+            artifacts: 'trivy-reports/*',
+            allowEmptyArchive: true
+          )
+        }
       }
     }
+
+    // ==========================================
+    // 10. CRITICAL VULNERABILITY GATE
+    // ==========================================
 
     stage('Security Gate: Critical Image Vulnerabilities') {
       steps {
@@ -237,19 +366,27 @@ pipeline {
           }
 
           for img in backend frontend; do
+
             trivy image --no-progress \
               --input "$img.tar" \
               --severity CRITICAL \
               --ignore-unfixed \
               --exit-code 1
+
           done
         '''
       }
     }
 
+    // ==========================================
+    // 11. TRIVY CONFIG SCAN
+    // ==========================================
+
     stage('Trivy: Kubernetes and Dockerfile Config') {
       steps {
         sh '''
+          set -eu
+
           docker run --rm \
             -u "$(id -u):$(id -g)" \
             -e HOME=/tmp \
@@ -267,39 +404,53 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 12. TERRAFORM VALIDATION
+    // ==========================================
+
     stage('Terraform: Validate') {
       steps {
         sh '''
           set -eu
 
           test -d "$TERRAFORM_DIR"
-          rm -rf "$TERRAFORM_DIR/.terraform"
-
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$PWD/$TERRAFORM_DIR":/tf \
-            -w /tf \
-            hashicorp/terraform:1.12.2 fmt -check -diff
-
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$PWD/$TERRAFORM_DIR":/tf \
-            -w /tf \
-            hashicorp/terraform:1.12.2 init -backend=false -input=false
-
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$PWD/$TERRAFORM_DIR":/tf \
-            -w /tf \
-            hashicorp/terraform:1.12.2 validate
 
           rm -rf "$TERRAFORM_DIR/.terraform"
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD/$TERRAFORM_DIR":/tf \
+            -w /tf \
+            hashicorp/terraform:1.12.2 \
+            fmt -check -diff
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD/$TERRAFORM_DIR":/tf \
+            -w /tf \
+            hashicorp/terraform:1.12.2 \
+            init -backend=false -input=false
+
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD/$TERRAFORM_DIR":/tf \
+            -w /tf \
+            hashicorp/terraform:1.12.2 \
+            validate
+
+          rm -rf "$TERRAFORM_DIR/.terraform"
+
+          echo "Terraform validation passed."
         '''
       }
     }
+
+    // ==========================================
+    // 13. CHECKOV
+    // ==========================================
 
     stage('Checkov: IaC Security Scan') {
       steps {
@@ -316,6 +467,10 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 14. INFRASTRUCTURE SECURITY GATE
+    // ==========================================
+
     stage('Infrastructure Gate') {
       steps {
         sh '''
@@ -331,9 +486,16 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 15. K3S VERIFICATION
+    // ==========================================
+
     stage('K3s: Verify Cluster') {
+
       when {
-        expression { return params.DEPLOY || params.MONITOR }
+        expression {
+          return params.DEPLOY || params.MONITOR
+        }
       }
 
       steps {
@@ -342,71 +504,114 @@ pipeline {
 
           test -f "$K3S_CONFIG"
 
-          KUBECONFIG="$K3S_CONFIG" \
-            /usr/local/bin/k3s kubectl get nodes -o wide
+          cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
+          chmod 600 "$WORKSPACE/.kubeconfig"
 
-          KUBECONFIG="$K3S_CONFIG" \
-            /usr/local/bin/k3s kubectl get namespaces
+          export KUBECONFIG="$WORKSPACE/.kubeconfig"
+
+          kubectl get nodes -o wide
+          kubectl get namespaces
+
+          echo "K3s cluster is accessible."
         '''
       }
     }
 
+    // ==========================================
+    // 16. IMPORT DOCKER IMAGES INTO K3S
+    // ==========================================
+
     stage('K3s: Import Local Docker Images') {
+
       when {
-        expression { return params.DEPLOY }
+        expression {
+          return params.DEPLOY
+        }
       }
 
       steps {
         sh '''
           set -eu
 
-          docker save "$BACKEND_IMAGE:$BUILD_NUMBER" -o backend-image.tar
-          docker save "$FRONTEND_IMAGE:$BUILD_NUMBER" -o frontend-image.tar
+          docker save \
+            "$BACKEND_IMAGE:$BUILD_NUMBER" \
+            -o backend-image.tar
+
+          docker save \
+            "$FRONTEND_IMAGE:$BUILD_NUMBER" \
+            -o frontend-image.tar
 
           sudo -n k3s ctr images import backend-image.tar
           sudo -n k3s ctr images import frontend-image.tar
 
           sudo -n k3s ctr images list | grep inventory-backend
           sudo -n k3s ctr images list | grep inventory-frontend
+
+          echo "Images imported into K3s."
         '''
       }
     }
 
+    // ==========================================
+    // 17. DEPLOY INVENTORY APPLICATION
+    // ==========================================
+
     stage('Kubernetes: Deploy Inventory') {
+
       when {
-        expression { return params.DEPLOY }
+        expression {
+          return params.DEPLOY
+        }
       }
 
       steps {
         sh '''
           set -eu
 
-          cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
-          chmod 600 "$WORKSPACE/.kubeconfig"
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl apply -f k8s/namespace.yaml
 
-          kubectl -n "$K3S_NAMESPACE" get secret db-credentials >/dev/null 2>&1 || \
-            kubectl -n "$K3S_NAMESPACE" create secret generic db-credentials \
-              --from-literal=password="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+          kubectl -n "$K3S_NAMESPACE" \
+            get secret db-credentials >/dev/null 2>&1 || \
+            kubectl -n "$K3S_NAMESPACE" \
+            create secret generic db-credentials \
+            --from-literal=password="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 
-          sed -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE:$BUILD_NUMBER|g" \
-              -e "s|__FRONTEND_IMAGE__|$FRONTEND_IMAGE:$BUILD_NUMBER|g" \
-              k8s/inventory.yaml > rendered.yaml
+          sed \
+            -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE:$BUILD_NUMBER|g" \
+            -e "s|__FRONTEND_IMAGE__|$FRONTEND_IMAGE:$BUILD_NUMBER|g" \
+            k8s/inventory.yaml > rendered.yaml
 
           kubectl apply -f rendered.yaml
 
-          kubectl -n "$K3S_NAMESPACE" rollout status deployment/postgres --timeout=180s
-          kubectl -n "$K3S_NAMESPACE" rollout status deployment/backend --timeout=420s
-          kubectl -n "$K3S_NAMESPACE" rollout status deployment/frontend --timeout=180s
+          kubectl -n "$K3S_NAMESPACE" \
+            rollout status deployment/postgres \
+            --timeout=180s
+
+          kubectl -n "$K3S_NAMESPACE" \
+            rollout status deployment/backend \
+            --timeout=420s
+
+          kubectl -n "$K3S_NAMESPACE" \
+            rollout status deployment/frontend \
+            --timeout=180s
+
+          echo "Inventory application deployed."
         '''
       }
     }
 
+    // ==========================================
+    // 18. HEALTH CHECKS
+    // ==========================================
+
     stage('Kubernetes: Health Checks and Smoke Tests') {
+
       when {
-        expression { return params.DEPLOY }
+        expression {
+          return params.DEPLOY
+        }
       }
 
       steps {
@@ -418,24 +623,37 @@ pipeline {
           kubectl -n "$K3S_NAMESPACE" get pods -o wide
           kubectl -n "$K3S_NAMESPACE" get services
 
-          NODEPORT="$(kubectl -n "$K3S_NAMESPACE" get svc frontend -o jsonpath='{.spec.ports[0].nodePort}')"
+          NODEPORT="$(
+            kubectl -n "$K3S_NAMESPACE" \
+            get svc frontend \
+            -o jsonpath='{.spec.ports[0].nodePort}'
+          )"
 
           [ -n "$NODEPORT" ] || {
-            echo "Frontend Service must be type NodePort for this pipeline."
+            echo "Frontend Service must be type NodePort."
             exit 1
           }
 
           APP_URL="http://127.0.0.1:$NODEPORT"
+
           echo "$APP_URL" > app_url.txt
 
           code=000
 
           for i in $(seq 1 30); do
-            code="$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/api/products" || true)"
+
+            code="$(
+              curl -s -o /dev/null \
+              -w "%{http_code}" \
+              "$APP_URL/api/products" || true
+            )"
+
             echo "Attempt $i: /api/products -> $code"
 
             [ "$code" = "200" ] && break
+
             sleep 10
+
           done
 
           [ "$code" = "200" ] || {
@@ -453,9 +671,16 @@ pipeline {
       }
     }
 
+    // ==========================================
+    // 19. OWASP ZAP DAST
+    // ==========================================
+
     stage('OWASP ZAP: DAST') {
+
       when {
-        expression { return params.RUN_ZAP && params.DEPLOY }
+        expression {
+          return params.RUN_ZAP && params.DEPLOY
+        }
       }
 
       options {
@@ -478,15 +703,28 @@ pipeline {
             -J zap-report.json \
             -I
         '''
+      }
 
-        archiveArtifacts artifacts: 'zap/*',
-          allowEmptyArchive: true
+      post {
+        always {
+          archiveArtifacts(
+            artifacts: 'zap/*',
+            allowEmptyArchive: true
+          )
+        }
       }
     }
 
+    // ==========================================
+    // 20. PROMETHEUS AND GRAFANA
+    // ==========================================
+
     stage('Monitoring: Prometheus and Grafana on K3s') {
+
       when {
-        expression { return params.MONITOR }
+        expression {
+          return params.MONITOR
+        }
       }
 
       options {
@@ -502,10 +740,12 @@ pipeline {
           kubectl create namespace "$MONITORING_NAMESPACE" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-          kubectl -n "$MONITORING_NAMESPACE" get secret grafana-admin >/dev/null 2>&1 || \
-            kubectl -n "$MONITORING_NAMESPACE" create secret generic grafana-admin \
-              --from-literal=admin-user=admin \
-              --from-literal=admin-password="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+          kubectl -n "$MONITORING_NAMESPACE" \
+            get secret grafana-admin >/dev/null 2>&1 || \
+            kubectl -n "$MONITORING_NAMESPACE" \
+            create secret generic grafana-admin \
+            --from-literal=admin-user=admin \
+            --from-literal=admin-password="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 
           helm repo add prometheus-community \
             https://prometheus-community.github.io/helm-charts
@@ -523,33 +763,47 @@ pipeline {
             --wait \
             --timeout 20m
 
-          [ ! -f "$MONITORING_DIR/servicemonitor.yaml" ] || \
+          if [ -f "$MONITORING_DIR/servicemonitor.yaml" ]; then
             kubectl apply -f "$MONITORING_DIR/servicemonitor.yaml"
+          fi
 
-          [ ! -f "$MONITORING_DIR/prometheusrule.yaml" ] || \
+          if [ -f "$MONITORING_DIR/prometheusrule.yaml" ]; then
             kubectl apply -f "$MONITORING_DIR/prometheusrule.yaml"
+          fi
 
-          [ ! -f "$MONITORING_DIR/grafana-dashboard.yaml" ] || \
+          if [ -f "$MONITORING_DIR/grafana-dashboard.yaml" ]; then
             kubectl apply -f "$MONITORING_DIR/grafana-dashboard.yaml"
+          fi
 
           kubectl -n "$MONITORING_NAMESPACE" get pods
           kubectl -n "$MONITORING_NAMESPACE" get svc
 
           echo "Grafana URL: http://<EC2-PUBLIC-IP>:30300"
           echo "Grafana username: admin"
-          echo "Retrieve password on EC2 using:"
+
+          echo "Retrieve Grafana password using:"
           echo "sudo k3s kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d"
         '''
       }
     }
   }
 
+  // ==========================================
+  // POST ACTIONS
+  // ==========================================
+
   post {
+
     always {
       sh '''
-        rm -f "$WORKSPACE/.kubeconfig" rendered.yaml \
-          backend-image.tar frontend-image.tar \
-          backend.tar frontend.tar tfplan || true
+        rm -f \
+          "$WORKSPACE/.kubeconfig" \
+          rendered.yaml \
+          backend-image.tar \
+          frontend-image.tar \
+          backend.tar \
+          frontend.tar \
+          tfplan || true
       '''
     }
 
