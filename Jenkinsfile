@@ -8,11 +8,13 @@ pipeline {
       defaultValue: false,
       description: 'Build, import images into local K3s and deploy Inventory Management'
     )
+
     booleanParam(
       name: 'MONITOR',
       defaultValue: false,
       description: 'Install or upgrade Prometheus and Grafana on K3s'
     )
+
     booleanParam(
       name: 'RUN_ZAP',
       defaultValue: false,
@@ -28,7 +30,9 @@ pipeline {
 
   environment {
     SONAR_HOST_URL = 'http://127.0.0.1:9000'
+
     K3S_CONFIG = '/var/lib/jenkins/.kube/config'
+
     K3S_NAMESPACE = 'inventory'
     MONITORING_NAMESPACE = 'monitoring'
 
@@ -56,14 +60,16 @@ pipeline {
           test -d frontend
           test -d k8s
           test -d "$TERRAFORM_DIR"
-          test -d devsecops/security
 
           echo "Checking Docker..."
+
           command -v docker
           command -v curl
+
           docker info >/dev/null
 
           if [ "${DEPLOY}" = "true" ] || [ "${MONITOR}" = "true" ]; then
+
             test -f "$K3S_CONFIG" || {
               echo "K3s kubeconfig missing: $K3S_CONFIG"
               exit 1
@@ -71,12 +77,26 @@ pipeline {
 
             command -v kubectl
 
-            KUBECONFIG="$K3S_CONFIG" \
-              /usr/local/bin/k3s kubectl get nodes
+            echo "Checking K3s connection..."
+
+            KUBECONFIG="$K3S_CONFIG" kubectl get nodes
+
           fi
 
           if [ "${MONITOR}" = "true" ]; then
+
+            test -d "$MONITORING_DIR" || {
+              echo "Monitoring directory missing: $MONITORING_DIR"
+              exit 1
+            }
+
+            test -f "$MONITORING_DIR/k8s-monitoring-values.yaml" || {
+              echo "Monitoring values file missing."
+              exit 1
+            }
+
             command -v helm
+
           fi
 
           echo "Preflight checks passed."
@@ -85,7 +105,7 @@ pipeline {
     }
 
     // ==========================================
-    // 2. GITLEAKS
+    // 2. GITLEAKS SECRET SCAN
     // ==========================================
 
     stage('Gitleaks: Secret Scan') {
@@ -107,7 +127,7 @@ pipeline {
     }
 
     // ==========================================
-    // 3. MAVEN BACKEND BUILD
+    // 3. MAVEN BACKEND BUILD AND TESTS
     // ==========================================
 
     stage('Maven: Backend Build and Tests') {
@@ -130,14 +150,16 @@ pipeline {
 
       post {
         always {
-          junit allowEmptyResults: true,
+          junit(
+            allowEmptyResults: true,
             testResults: 'backend/target/surefire-reports/*.xml'
+          )
         }
       }
     }
 
     // ==========================================
-    // 4. FRONTEND BUILD
+    // 4. FRONTEND TESTS AND BUILD
     // ==========================================
 
     stage('npm: Frontend Tests and Build') {
@@ -188,7 +210,7 @@ pipeline {
     }
 
     // ==========================================
-    // 6. OWASP DEPENDENCY CHECK
+    // 6. OWASP DEPENDENCY-CHECK SCA
     // ==========================================
 
     stage('OWASP Dependency-Check: SCA') {
@@ -238,7 +260,7 @@ pipeline {
     }
 
     // ==========================================
-    // 7. HADOLINT
+    // 7. HADOLINT DOCKERFILE LINT
     // ==========================================
 
     stage('Hadolint: Dockerfile Lint') {
@@ -259,12 +281,14 @@ pipeline {
               hadolint/hadolint:latest-debian < "$file"
 
           done
+
+          echo "Dockerfile lint completed."
         '''
       }
     }
 
     // ==========================================
-    // 8. DOCKER BUILD
+    // 8. DOCKER IMAGE BUILD
     // ==========================================
 
     stage('Docker Image Build') {
@@ -288,7 +312,7 @@ pipeline {
     }
 
     // ==========================================
-    // 9. TRIVY IMAGE SCAN
+    // 9. TRIVY CONTAINER IMAGE SCAN
     // ==========================================
 
     stage('Trivy: Container Image Scan') {
@@ -332,6 +356,8 @@ pipeline {
               --output "trivy-reports/sbom-$img.cdx.json"
 
           done
+
+          echo "Trivy image scans completed."
         '''
       }
 
@@ -346,7 +372,7 @@ pipeline {
     }
 
     // ==========================================
-    // 10. CRITICAL VULNERABILITY GATE
+    // 10. CRITICAL IMAGE VULNERABILITY GATE
     // ==========================================
 
     stage('Security Gate: Critical Image Vulnerabilities') {
@@ -374,12 +400,14 @@ pipeline {
               --exit-code 1
 
           done
+
+          echo "Critical vulnerability gate passed."
         '''
       }
     }
 
     // ==========================================
-    // 11. TRIVY CONFIG SCAN
+    // 11. TRIVY KUBERNETES AND DOCKERFILE SCAN
     // ==========================================
 
     stage('Trivy: Kubernetes and Dockerfile Config') {
@@ -449,12 +477,14 @@ pipeline {
     }
 
     // ==========================================
-    // 13. CHECKOV
+    // 13. CHECKOV IAC SECURITY SCAN
     // ==========================================
 
     stage('Checkov: IaC Security Scan') {
       steps {
         sh '''
+          set -eu
+
           docker run --rm \
             -v "$PWD/$TERRAFORM_DIR":/tf \
             bridgecrew/checkov:latest \
@@ -474,6 +504,8 @@ pipeline {
     stage('Infrastructure Gate') {
       steps {
         sh '''
+          set -eu
+
           docker run --rm \
             -v "$PWD/$TERRAFORM_DIR":/tf \
             bridgecrew/checkov:latest \
@@ -487,7 +519,7 @@ pipeline {
     }
 
     // ==========================================
-    // 15. K3S VERIFICATION
+    // 15. K3S CLUSTER VERIFICATION
     // ==========================================
 
     stage('K3s: Verify Cluster') {
@@ -505,11 +537,13 @@ pipeline {
           test -f "$K3S_CONFIG"
 
           cat "$K3S_CONFIG" > "$WORKSPACE/.kubeconfig"
+
           chmod 600 "$WORKSPACE/.kubeconfig"
 
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl get nodes -o wide
+
           kubectl get namespaces
 
           echo "K3s cluster is accessible."
@@ -542,9 +576,11 @@ pipeline {
             -o frontend-image.tar
 
           sudo -n k3s ctr images import backend-image.tar
+
           sudo -n k3s ctr images import frontend-image.tar
 
           sudo -n k3s ctr images list | grep inventory-backend
+
           sudo -n k3s ctr images list | grep inventory-frontend
 
           echo "Images imported into K3s."
@@ -553,7 +589,7 @@ pipeline {
     }
 
     // ==========================================
-    // 17. DEPLOY INVENTORY APPLICATION
+    // 17. KUBERNETES INVENTORY DEPLOYMENT
     // ==========================================
 
     stage('Kubernetes: Deploy Inventory') {
@@ -603,7 +639,7 @@ pipeline {
     }
 
     // ==========================================
-    // 18. HEALTH CHECKS
+    // 18. HEALTH CHECKS AND SMOKE TESTS
     // ==========================================
 
     stage('Kubernetes: Health Checks and Smoke Tests') {
@@ -621,6 +657,7 @@ pipeline {
           export KUBECONFIG="$WORKSPACE/.kubeconfig"
 
           kubectl -n "$K3S_NAMESPACE" get pods -o wide
+
           kubectl -n "$K3S_NAMESPACE" get services
 
           NODEPORT="$(
@@ -692,6 +729,7 @@ pipeline {
           set -eu
 
           mkdir -p zap
+
           chmod 777 zap
 
           docker run --rm \
@@ -716,7 +754,7 @@ pipeline {
     }
 
     // ==========================================
-    // 20. PROMETHEUS AND GRAFANA
+    // 20. PROMETHEUS AND GRAFANA MONITORING
     // ==========================================
 
     stage('Monitoring: Prometheus and Grafana on K3s') {
@@ -776,9 +814,11 @@ pipeline {
           fi
 
           kubectl -n "$MONITORING_NAMESPACE" get pods
+
           kubectl -n "$MONITORING_NAMESPACE" get svc
 
           echo "Grafana URL: http://<EC2-PUBLIC-IP>:30300"
+
           echo "Grafana username: admin"
 
           echo "Retrieve Grafana password using:"
