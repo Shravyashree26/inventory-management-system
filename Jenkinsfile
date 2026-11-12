@@ -56,8 +56,6 @@ pipeline {
       }
     }
 
-    // UPDATED: Use H2 in-memory database for Jenkins tests.
-    // No PostgreSQL server is required for this Maven stage.
     stage('Maven: Backend Build and Tests') {
       steps {
         sh '''
@@ -109,26 +107,31 @@ pipeline {
         timeout(time: 45, unit: 'MINUTES')
       }
       steps {
-        withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-          sh '''
-            set -eu
-            mkdir -p odc-reports /var/lib/jenkins/odc-data
-            if [ -f /var/lib/jenkins/odc-data/odc.mv.db ]; then
-              UPDATE="--noupdate"
-            else
-              UPDATE="--nvdApiKey $NVD_API_KEY"
-            fi
-            docker run --rm -u "$(id -u):$(id -g)" \
-              -e HOME=/tmp -e JAVA_OPTS=-Xmx2g \
-              -v "$PWD":/src -v /var/lib/jenkins/odc-data:/odc-data \
-              owasp/dependency-check:12.1.0 \
-              --scan "/src/backend/target/*.jar" \
-              --scan /src/frontend/package-lock.json \
-              --suppression "/src/$SUPPRESSION_FILE" \
-              --data /odc-data --out /src/odc-reports \
-              --format HTML --format JSON --disableNodeAudit $UPDATE
-          '''
-        }
+        sh '''
+          set -eu
+          mkdir -p odc-reports /var/lib/jenkins/odc-data
+
+          if [ -f /var/lib/jenkins/odc-data/odc.mv.db ]; then
+            UPDATE="--noupdate"
+          else
+            UPDATE=""
+          fi
+
+          docker run --rm -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e JAVA_OPTS=-Xmx2g \
+            -v "$PWD":/src \
+            -v /var/lib/jenkins/odc-data:/odc-data \
+            owasp/dependency-check:12.1.0 \
+            --scan "/src/backend/target/*.jar" \
+            --scan /src/frontend/package-lock.json \
+            --suppression "/src/$SUPPRESSION_FILE" \
+            --data /odc-data \
+            --out /src/odc-reports \
+            --format HTML \
+            --format JSON \
+            --disableNodeAudit \
+            $UPDATE
+        '''
         archiveArtifacts artifacts: 'odc-reports/*', allowEmptyArchive: true
       }
     }
