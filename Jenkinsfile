@@ -30,7 +30,6 @@ pipeline {
 
   environment {
     SONAR_HOST_URL = 'http://127.0.0.1:9000'
-
     K3S_CONFIG = '/var/lib/jenkins/.kube/config'
 
     K3S_NAMESPACE = 'inventory'
@@ -80,7 +79,6 @@ pipeline {
             export KUBECONFIG="$K3S_CONFIG"
 
             kubectl get nodes
-
           fi
 
           if [ "${MONITOR}" = "true" ]; then
@@ -96,7 +94,6 @@ pipeline {
             }
 
             command -v helm
-
           fi
 
           echo "Preflight checks passed."
@@ -213,7 +210,6 @@ pipeline {
     // ==========================================
 
     stage('OWASP Dependency-Check: SCA') {
-
       options {
         timeout(time: 120, unit: 'MINUTES')
       }
@@ -259,7 +255,7 @@ pipeline {
     }
 
     // ==========================================
-    // 7. HADOLINT
+    // 7. HADOLINT - CORRECTED
     // ==========================================
 
     stage('Hadolint: Dockerfile Lint') {
@@ -277,8 +273,10 @@ pipeline {
             echo "Checking $file"
 
             docker run --rm -i \
+              --entrypoint hadolint \
               hadolint/hadolint:latest-debian \
-              --failure-threshold error - < "$file"
+              --failure-threshold error \
+              - < "$file"
 
           done
 
@@ -517,7 +515,6 @@ pipeline {
     // ==========================================
 
     stage('K3s: Verify Cluster') {
-
       when {
         expression {
           return params.DEPLOY || params.MONITOR
@@ -548,7 +545,6 @@ pipeline {
     // ==========================================
 
     stage('K3s: Import Local Docker Images') {
-
       when {
         expression {
           return params.DEPLOY
@@ -583,7 +579,6 @@ pipeline {
     // ==========================================
 
     stage('Kubernetes: Deploy Inventory') {
-
       when {
         expression {
           return params.DEPLOY
@@ -627,7 +622,6 @@ pipeline {
     // ==========================================
 
     stage('Kubernetes: Health Checks and Smoke Tests') {
-
       when {
         expression {
           return params.DEPLOY
@@ -670,7 +664,6 @@ pipeline {
             [ "$code" = "200" ] && break
 
             sleep 10
-
           done
 
           [ "$code" = "200" ] || {
@@ -693,7 +686,6 @@ pipeline {
     // ==========================================
 
     stage('OWASP ZAP: DAST') {
-
       when {
         expression {
           return params.RUN_ZAP && params.DEPLOY
@@ -737,7 +729,6 @@ pipeline {
     // ==========================================
 
     stage('Monitoring: Prometheus and Grafana on K3s') {
-
       when {
         expression {
           return params.MONITOR
@@ -810,7 +801,6 @@ pipeline {
   // ==========================================
 
   post {
-
     always {
       sh '''
         rm -f \
