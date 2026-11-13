@@ -718,7 +718,8 @@ pipeline {
     }
 
     // ==========================================
-    // 19. OWASP ZAP
+    // ==========================================
+    // 19. OWASP ZAP: DAST
     // ==========================================
 
     stage('OWASP ZAP: DAST') {
@@ -738,38 +739,46 @@ pipeline {
 
           echo "Checking application URL..."
 
-          test -s app_url.txt
-          APP_URL=$(cat app_url.txt)
+          test -s "$WORKSPACE/app_url.txt"
+          APP_URL="$(cat "$WORKSPACE/app_url.txt")"
 
           echo "ZAP target: $APP_URL"
 
-          echo "Testing application connectivity from Jenkins host..."
+          echo "Testing application connectivity..."
 
           curl --fail --silent --show-error \
             "$APP_URL/api/products" \
             -o /dev/null
 
-          mkdir -p zap
-          chmod 777 zap
+          echo "Preparing ZAP report directory..."
 
-          echo "Starting ZAP using host networking..."
+          mkdir -p "$WORKSPACE/zap"
+          chmod 777 "$WORKSPACE/zap"
+
+          rm -f "$WORKSPACE/zap/zap-report.html"
+          rm -f "$WORKSPACE/zap/zap-report.json"
+
+          echo "Starting OWASP ZAP scan..."
 
           docker run --rm \
             --network host \
             -v "$WORKSPACE/zap:/zap/wrk:rw" \
+            -w /zap/wrk \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
             -t "$APP_URL" \
-            -r /zap/wrk/zap-report.html \
-            -J /zap/wrk/zap-report.json \
+            -r zap-report.html \
+            -J zap-report.json \
             -I
 
-          echo "Checking ZAP reports..."
+          echo "Checking generated reports..."
 
-          test -s zap/zap-report.html
-          test -s zap/zap-report.json
+          ls -lah "$WORKSPACE/zap"
 
-          echo "ZAP scan completed successfully."
+          test -s "$WORKSPACE/zap/zap-report.html"
+          test -s "$WORKSPACE/zap/zap-report.json"
+
+          echo "ZAP reports generated successfully."
         '''
       }
 
